@@ -1,0 +1,113 @@
+name: Foreign metadata validation
+
+on:
+  push:
+    branches: [validation/foreign-metadata-20261018]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: source
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 52fac3fb7a529405bfe6547b81320d3055450bb3
+          path: source
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          path: validation
+          persist-credentials: false
+          sparse-checkout: .github/validation
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: source/go.mod
+          cache-dependency-path: |
+            source/go.sum
+            source/plugin/agentanalytics/go.sum
+      - name: Record tested source and workspace
+        run: |
+          mkdir -p ../evidence
+          git rev-parse HEAD | tee ../evidence/source-sha.txt
+          git ls-tree -r HEAD > ../evidence/source-tree.txt
+          go work init
+          go work use -r .
+          go version | tee ../evidence/go-version.txt
+          go work edit -json > ../evidence/workspace.json
+      - name: Formatting
+        run: |
+          gofmt -d internal/llminternal/contents_processor.go internal/llminternal/foreign_thoughts_test.go \
+            internal/llminternal/foreign_payloads_test.go | tee ../evidence/gofmt.diff
+          test ! -s ../evidence/gofmt.diff
+      - name: Download dependencies
+        run: |
+          go mod download
+          (cd plugin/agentanalytics && go mod download)
+      - name: Regression proof on original source
+        run: |
+          git show 74faa9ab6bf58b47653ed275f4aa86a93e76280a:internal/llminternal/contents_processor.go > internal/llminternal/contents_processor.go
+          set +e
+          go test -race -mod=readonly -count=1 -json ./internal/llminternal \
+            -run 'TestConvertForeignEvent_RetainsPayloadParts|TestContentsRequestProcessor_ForeignThoughts|TestContentsRequestProcessor_ForeignThoughtCurrentTurn' \
+            > ../evidence/original.jsonl 2> ../evidence/original.stderr
+          code=$?
+          go run -race -mod=readonly ../validation/.github/validation/runner-probe.go > ../evidence/runner-original.txt 2>&1
+          runner_code=$?
+          set -e
+          git restore internal/llminternal/contents_processor.go
+          test "$code" -eq 1
+          test "$runner_code" -eq 1
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          events = [json.loads(line) for line in Path('../evidence/original.jsonl').read_text().splitlines() if line.startswith('{')]
+          failed = [event['Test'] for event in events if event.get('Action') == 'fail' and '/' in event.get('Test', '')]
+          assert len(failed) == 20, failed
+          assert not any(event.get('Action') == 'build-fail' for event in events)
+          assert 'PASS 2 FAIL 4 TOTAL 6' in Path('../evidence/runner-original.txt').read_text()
+          print('Original source: 20 failing leaf regressions; Runner probe 4 fail / 2 controls pass')
+          PY
+      - name: Focused race tests and offline Runner probe
+        run: |
+          go test -race -mod=readonly -count=3 -shuffle=on -json ./internal/llminternal > ../evidence/focused.jsonl
+          go run -race -mod=readonly ../validation/.github/validation/runner-probe.go | tee ../evidence/runner-fixed.txt
+          grep -F 'PASS 6 FAIL 0 TOTAL 6' ../evidence/runner-fixed.txt
+      - name: Mutation coverage
+        run: python3 ../validation/.github/validation/mutations.py | tee ../evidence/mutations.txt
+      - name: Build and race tests in every workspace module
+        run: |
+          go build -mod=readonly work 2>&1 | tee ../evidence/build.txt
+          go test -race -mod=readonly -count=1 -shuffle=on -timeout=180s -json work > ../evidence/workspace-tests.jsonl
+      - name: Tidy check in both modules
+        run: |
+          go mod tidy -diff | tee ../evidence/root-tidy.txt
+          (cd plugin/agentanalytics && go mod tidy -diff) | tee ../evidence/analytics-tidy.txt
+          test ! -s ../evidence/root-tidy.txt
+          test ! -s ../evidence/analytics-tidy.txt
+      - name: Install pinned linter
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.3.1
+      - name: Lint and formatting checks in both modules
+        run: |
+          golangci-lint run --timeout=10m 2>&1 | tee ../evidence/root-lint.txt
+          golangci-lint fmt --diff | tee ../evidence/root-format.diff
+          (cd plugin/agentanalytics && golangci-lint run --timeout=10m) 2>&1 | tee ../evidence/analytics-lint.txt
+          (cd plugin/agentanalytics && golangci-lint fmt --diff) | tee ../evidence/analytics-format.diff
+          test ! -s ../evidence/root-format.diff
+          test ! -s ../evidence/analytics-format.diff
+      - name: Verify unchanged tracked source
+        run: git diff --exit-code
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: foreign-metadata-evidence
+          path: evidence/
+          if-no-files-found: error
