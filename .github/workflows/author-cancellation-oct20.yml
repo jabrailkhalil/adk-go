@@ -1,0 +1,82 @@
+name: Author cancellation head-base diagnosis
+
+on:
+  push:
+    branches: [validation/cancellation-oct20]
+
+permissions:
+  contents: read
+
+jobs:
+  cancellation:
+    name: Cancellation stress (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: head
+            ref: 0b7603eea80ed06eec9858def6c7cca8aa2b1c85
+          - label: base
+            ref: 8cb742516609d1d4cb71745a1226255ff20a4b1f
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+      - name: Verify source
+        env:
+          EXPECTED: ${{ matrix.ref }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          git diff --exit-code "$EXPECTED" -- .
+      - uses: ./.github/actions/setup
+      - name: Initialize workspace
+        run: go work init && go work use -r .
+      - name: Repeat unmodified cancellation test with upstream shuffle seed
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race -mod=readonly -json -count=200 -shuffle=1792439652092133875 -run '^TestA2AMultiHopInputRequiredCancellation$' ./agent/remoteagent/v2 | tee cancellation.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cancellation-${{ matrix.label }}
+          path: cancellation.jsonl
+          if-no-files-found: warn
+
+  complete:
+    name: Unmodified full suite (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ['.', './plugin/agentanalytics']
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 0b7603eea80ed06eec9858def6c7cca8aa2b1c85
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Initialize workspace
+        run: go work init && go work use -r .
+      - name: Tidy check
+        working-directory: ${{ matrix.module }}
+        run: go mod tidy -diff
+      - name: Build
+        working-directory: ${{ matrix.module }}
+        run: go build -mod=readonly -v ./...
+      - name: Full race and shuffle suite
+        working-directory: ${{ matrix.module }}
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race -mod=readonly -json -count=1 -shuffle=on ./... | tee full-suite.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-suite-${{ strategy.job-index }}
+          path: '**/full-suite.jsonl'
+          if-no-files-found: warn
