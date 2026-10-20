@@ -1,0 +1,48 @@
+name: Author A2A package-order diagnosis
+on:
+  push:
+    branches: [validation/cancellation-order-oct20]
+permissions:
+  contents: read
+jobs:
+  package:
+    name: Full A2A package repeated (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: head
+            ref: 0b7603eea80ed06eec9858def6c7cca8aa2b1c85
+          - label: base
+            ref: 8cb742516609d1d4cb71745a1226255ff20a4b1f
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+      - name: Verify exact source
+        env:
+          EXPECTED: ${{ matrix.ref }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          git diff --exit-code "$EXPECTED" -- .
+      - uses: ./.github/actions/setup
+      - name: Initialize workspace
+        run: go work init && go work use -r .
+      - name: Record cancellation-package dependency graph
+        run: go list -mod=readonly -deps -test ./agent/remoteagent/v2 | tee dependencies.txt
+      - name: Repeat complete A2A package with upstream shuffle seed
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race -mod=readonly -json -count=20 -shuffle=1792439652092133875 ./agent/remoteagent/v2 | tee package.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: a2a-package-${{ matrix.label }}
+          path: |
+            package.jsonl
+            dependencies.txt
+          if-no-files-found: warn
