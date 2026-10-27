@@ -2,7 +2,7 @@ name: Foreign metadata validation
 
 on:
   push:
-    branches: [validation/foreign-metadata-20261018]
+    branches: [validation/foreign-metadata-20261027]
   workflow_dispatch:
 
 permissions:
@@ -12,6 +12,11 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      GOMAXPROCS: '4'
+      GOFLAGS: '-p=2'
+      GOOGLE_API_KEY: ''
+      GEMINI_API_KEY: ''
     defaults:
       run:
         working-directory: source
@@ -19,9 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 52fac3fb7a529405bfe6547b81320d3055450bb3
+          ref: 045baa8af3381e135215e68c59dbda3ab2fdb04d
           path: source
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
@@ -39,7 +44,7 @@ jobs:
           mkdir -p ../evidence
           git rev-parse HEAD | tee ../evidence/source-sha.txt
           git ls-tree -r HEAD > ../evidence/source-tree.txt
-          go work init
+          test -f go.work || go work init
           go work use -r .
           go version | tee ../evidence/go-version.txt
           go work edit -json > ../evidence/workspace.json
@@ -54,7 +59,7 @@ jobs:
           (cd plugin/agentanalytics && go mod download)
       - name: Regression proof on original source
         run: |
-          git show 74faa9ab6bf58b47653ed275f4aa86a93e76280a:internal/llminternal/contents_processor.go > internal/llminternal/contents_processor.go
+          git show 733b52570555653a768134ab827e01691be8d871:internal/llminternal/contents_processor.go > internal/llminternal/contents_processor.go
           set +e
           go test -race -mod=readonly -count=1 -json ./internal/llminternal \
             -run 'TestConvertForeignEvent_RetainsPayloadParts|TestContentsRequestProcessor_ForeignThoughts|TestContentsRequestProcessor_ForeignThoughtCurrentTurn' \
@@ -71,10 +76,10 @@ jobs:
           from pathlib import Path
           events = [json.loads(line) for line in Path('../evidence/original.jsonl').read_text().splitlines() if line.startswith('{')]
           failed = [event['Test'] for event in events if event.get('Action') == 'fail' and '/' in event.get('Test', '')]
-          assert len(failed) == 20, failed
+          assert len(failed) == 28, failed
           assert not any(event.get('Action') == 'build-fail' for event in events)
           assert 'PASS 2 FAIL 4 TOTAL 6' in Path('../evidence/runner-original.txt').read_text()
-          print('Original source: 20 failing leaf regressions; Runner probe 4 fail / 2 controls pass')
+          print('Original source: 28 failing leaf regressions; Runner probe 4 fail / 2 controls pass')
           PY
       - name: Focused race tests and offline Runner probe
         run: |
@@ -86,6 +91,7 @@ jobs:
       - name: Build and race tests in every workspace module
         run: |
           go build -mod=readonly work 2>&1 | tee ../evidence/build.txt
+          go vet -mod=readonly work 2>&1 | tee ../evidence/vet.txt
           go test -race -mod=readonly -count=1 -shuffle=on -timeout=180s -json work > ../evidence/workspace-tests.jsonl
       - name: Tidy check in both modules
         run: |

@@ -16,12 +16,20 @@ variants = {"without-" + name: " || ".join(f"p.{other} != nil" for other in cond
 variants["require-signature"] = f"({predicate}) && len(p.ThoughtSignature) > 0"
 variants["allow-standalone-signature"] = predicate + " || len(p.ThoughtSignature) > 0"
 variants["allow-standalone-metadata"] = predicate + " || p.PartMetadata != nil"
+for name in ["VideoMetadata", "MediaResolution", "SpeechMetadata"]:
+    variants["allow-standalone-" + name] = predicate + f" || p.{name} != nil"
+variants["allow-standalone-MediaProcessing"] = predicate + ' || p.MediaProcessing != ""'
 replacements = {name: f"\t\tcase {expression}:\n\t\t\tconverted.Parts = append(converted.Parts, p)"
                 for name, expression in variants.items()}
 replacements["mutate-code"] = old.replace("\t\t\tconverted.Parts =", '\t\t\tif p.ExecutableCode != nil { p.ExecutableCode.Code = "" }\n\t\t\tconverted.Parts =')
 replacements["mutate-tool-args"] = old.replace("\t\t\tconverted.Parts =", '\t\t\tif p.ToolCall != nil { clear(p.ToolCall.Args) }\n\t\t\tconverted.Parts =')
 replacements["mutate-tool-result"] = old.replace("\t\t\tconverted.Parts =", '\t\t\tif p.ToolResponse != nil { clear(p.ToolResponse.Response) }\n\t\t\tconverted.Parts =')
 replacements["mutate-attached-signature"] = old.replace("\t\t\tconverted.Parts =", '\t\t\tp.ThoughtSignature = nil\n\t\t\tconverted.Parts =')
+for name in ["VideoMetadata", "MediaResolution", "SpeechMetadata"]:
+    replacements["drop-attached-" + name] = old.replace(
+        "\t\t\tconverted.Parts =", f"\t\t\tp.{name} = nil\n\t\t\tconverted.Parts =")
+replacements["drop-attached-MediaProcessing"] = old.replace(
+    "\t\t\tconverted.Parts =", '\t\t\tp.MediaProcessing = ""\n\t\t\tconverted.Parts =')
 results = []
 try:
     for name, replacement in replacements.items():
@@ -40,4 +48,4 @@ try:
 finally:
     source.write_text(original)
     (evidence / "mutations.json").write_text(json.dumps(results, indent=2))
-assert len(results) == 14
+assert len(results) == 22
