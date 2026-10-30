@@ -1,0 +1,51 @@
+name: Foreign metadata current-main comparison
+
+on:
+  push:
+    branches: [validation/foreign-metadata-main-20261030]
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOMAXPROCS: '4'
+      GOFLAGS: '-p=2'
+      GOOGLE_API_KEY: ''
+      GEMINI_API_KEY: ''
+    defaults:
+      run:
+        working-directory: source
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 5f5e1b537e5e2932f0e97bd6606ece9020828029
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: source/go.mod
+          cache-dependency-path: source/go.sum
+      - name: Record exact current main
+        run: |
+          mkdir -p ../evidence
+          git rev-parse HEAD | tee ../evidence/source-sha.txt
+          go version | tee ../evidence/go-version.txt
+          test -f go.work || go work init
+          go work use -r .
+          go work edit -json > ../evidence/workspace.json
+      - name: Same whole-package race count and captured shuffle seed
+        run: go test -race -mod=readonly -count=3 -shuffle=1793110651171935001 -json ./internal/llminternal > ../evidence/focused.jsonl
+      - name: Verify pristine current main
+        if: ${{ !cancelled() }}
+        run: git diff --exit-code
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: foreign-metadata-current-main-evidence
+          path: evidence/
+          if-no-files-found: error
