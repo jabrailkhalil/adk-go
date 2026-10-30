@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 045baa8af3381e135215e68c59dbda3ab2fdb04d
+          ref: ef31bc11ae4bc583da8f77b22aea4dd47cf751f1
           path: source
           fetch-depth: 0
           persist-credentials: false
@@ -76,10 +76,10 @@ jobs:
           from pathlib import Path
           events = [json.loads(line) for line in Path('../evidence/original.jsonl').read_text().splitlines() if line.startswith('{')]
           failed = [event['Test'] for event in events if event.get('Action') == 'fail' and '/' in event.get('Test', '')]
-          assert len(failed) == 28, failed
+          assert len(failed) == 42, failed
           assert not any(event.get('Action') == 'build-fail' for event in events)
           assert 'PASS 2 FAIL 4 TOTAL 6' in Path('../evidence/runner-original.txt').read_text()
-          print('Original source: 28 failing leaf regressions; Runner probe 4 fail / 2 controls pass')
+          print('Original source: 42 failing leaf regressions; Runner probe 4 fail / 2 controls pass')
           PY
       - name: Focused race tests and offline Runner probe
         run: |
